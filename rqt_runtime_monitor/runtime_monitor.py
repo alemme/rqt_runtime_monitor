@@ -43,7 +43,7 @@ class RuntimeMonitor(Plugin):
         super(RuntimeMonitor, self).__init__(context)
         self.setObjectName('runtime_monitor')
 
-        self._widget = RuntimeMonitorWidget()
+        self._widget = RuntimeMonitorWidget(context.node)
         if context.serial_number() > 1:
             self._widget.setWindowTitle(self._widget.windowTitle() + (' (%d)' % context.serial_number()))
         context.add_widget(self._widget)
@@ -62,3 +62,14 @@ class RuntimeMonitor(Plugin):
     #def trigger_configuration(self):
         # Comment in to signal that the plugin has a way to configure it
         # Usually used to open a dialog to offer the user a set of configuration
+
+
+def main():
+    import sys
+    from rqt_gui.main import Main
+    main = Main()
+    sys.exit(main.main(sys.argv, standalone='rqt_runtime_monitor.runtime_monitor.RuntimeMonitor'))
+
+
+if __name__ == "__main__":
+    main()

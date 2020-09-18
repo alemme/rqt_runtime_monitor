@@ -32,12 +32,13 @@
 # POSSIBILITY OF SUCH DAMAGE.
 #
 import copy
+
 try:
     from cStringIO import StringIO
 except ImportError:
     from io import StringIO
 import os
-import rospkg
+from ros2pkg.api import get_prefix_path
 import threading
 
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus
@@ -45,12 +46,13 @@ from python_qt_binding import loadUi
 from python_qt_binding.QtGui import QIcon
 from python_qt_binding.QtWidgets import QTreeWidgetItem, QWidget
 from python_qt_binding.QtCore import Qt, QTimer, QObject
-import rospy
+import rclpy
+from rclpy.duration import Duration
 
 
 class TreeItem(QObject):
-    ##\param status DiagnosticsStatus : Diagnostic data of item
-    ##\param tree_node wxTreeItemId : Tree ID of item in display
+    # \param status DiagnosticsStatus : Diagnostic data of item
+    # \param tree_node wxTreeItemId : Tree ID of item in display
     def __init__(self, status, tree_node):
         super(TreeItem, self).__init__()
         self.status = status
@@ -60,10 +62,13 @@ class TreeItem(QObject):
 
 
 class RuntimeMonitorWidget(QWidget):
-    def __init__(self, topic="diagnostics"):
+    def __init__(self, node, topic="/diagnostics"):
         super(RuntimeMonitorWidget, self).__init__()
-        rp = rospkg.RosPack()
-        ui_file = os.path.join(rp.get_path('rqt_runtime_monitor'), 'resource', 'runtime_monitor_widget.ui')
+        ui_file = os.path.join(
+            get_prefix_path('rqt_runtime_monitor'),
+            'resource',
+            'runtime_monitor_widget.ui'
+        )
         loadUi(ui_file, self)
         self.setObjectName('RuntimeMonitorWidget')
 
@@ -93,10 +98,11 @@ class RuntimeMonitorWidget(QWidget):
 
         self._name_to_item = {}
         self._new_errors_callback = None
+        self._node = node
+        self._subscriber = self._node.create_subscription(DiagnosticArray,
+                                                          topic, self._diagnostics_callback, 10)
 
-        self._subscriber = rospy.Subscriber(topic, DiagnosticArray, self._diagnostics_callback)
-
-        self._previous_ros_time = rospy.Time.now()
+        self._previous_ros_time = self._node.get_clock().now()
         self._timer = QTimer()
         self._timer.timeout.connect(self._on_timer)
         self._timer.start(1000)
@@ -110,7 +116,7 @@ class RuntimeMonitorWidget(QWidget):
 
     def __del__(self):
         self.shutdown()
- 
+
     def shutdown(self):
         """
         Unregisters subscriber and stops timers
@@ -118,11 +124,11 @@ class RuntimeMonitorWidget(QWidget):
         self._msg_timer.stop()
         self._timer.stop()
 
-        if rospy.is_shutdown():
+        if not rclpy.ok():
             return
 
         if self._subscriber:
-            self._subscriber.unregister()
+            self._node.destroy_subscription(self._subscriber)
             self._subscriber = None
 
     def change_diagnostic_topic(self, topic):
@@ -134,8 +140,9 @@ class RuntimeMonitorWidget(QWidget):
             return
 
         if self._subscriber:
-            self._subscriber.unregister()
-            self._subscriber = rospy.Subscriber(str(topic), DiagnosticArray, self._diagnostics_callback)
+            self._node.destroy_subscription(self._subscriber)
+            self._subscriber = self._node.create_subscription(DiagnosticArray,
+                                                              str(topic), self._diagnostics_callback)
         self.reset_monitor()
 
     def reset_monitor(self):
@@ -219,7 +226,7 @@ class RuntimeMonitorWidget(QWidget):
             parent_node.addChild(item.tree_node)
 
             # expand errors automatically
-            if (status.level > 1 or status.level == -1):
+            if status.level in [DiagnosticStatus.ERROR, DiagnosticStatus.STALE]:
                 parent_node.setExpanded(True)
 
             parent_node.sortChildren(0, Qt.AscendingOrder)
@@ -258,7 +265,7 @@ class RuntimeMonitorWidget(QWidget):
         if (select):
             item.tree_node.setSelected(True)
 
-        if (expand_if_error and (status.level > 1 or status.level == -1)):
+        if (expand_if_error and status.level in [DiagnosticStatus.STALE, DiagnosticStatus.ERROR]):
             parent_node.setExpanded(True)
 
         item.mark = True
@@ -319,9 +326,9 @@ class RuntimeMonitorWidget(QWidget):
             event.ignore()
 
     def _on_timer(self):
-        if self._previous_ros_time + rospy.Duration(5) > rospy.Time.now():
+        if self._previous_ros_time + Duration(seconds=5) > self._node.get_clock().now():
             return
-        self._previous_ros_time = rospy.Time.now()
+        self._previous_ros_time = self._node.get_clock().now()
         for name, item in self._name_to_item.items():
             node = item.tree_node
             if (item != None):
@@ -332,7 +339,7 @@ class RuntimeMonitorWidget(QWidget):
                         was_selected = True
 
                     new_status = copy.deepcopy(item.status)
-                    new_status.level = -1 # mark stale
+                    new_status.level = DiagnosticStatus.STALE  # mark stale
                     self._update_item(item, new_status, was_selected)
                 item.mark = False
         self._update_root_labels()
